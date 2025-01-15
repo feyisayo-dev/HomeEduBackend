@@ -26,28 +26,18 @@ class StoreUserRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'email' => 'required|email|string',
-            'password' => 'required|string|min:6',
-            'sname' => 'required|string|max:191',
-            'fname' => 'required|string|max:191',
-            'mname' => 'nullable|string|max:191',
-            'Gender' => 'required|string|max:191',
+            'username' => 'required|string|string',
+            'fullName' => 'required|string|min:6',
             'dob' => 'required|string|max:191',
-            'Status' => 'nullable|string|max:191',
-            'mobile' => 'required|string|max:191',
-            'Altmobile' => 'nullable|string|max:191',
+            'email' => 'required|email|max:191',
+            'password' => 'required|string|max:191',
+            'phoneNumber' => 'required|string|max:191',
+            'class' => 'required|string|max:191',
+            'parentName' => 'required|string|max:191',
+            'parentContact' => 'required|string|max:191',
             'address' => 'required|string|max:191',
-            'Country' => 'required|string|max:191',
-            'State' => 'required|string|max:191',
-            'City' => 'nullable|string|max:191',
-            'Title' => 'required|string|max:191',
-            'dot' => 'nullable|string|max:191',
-            'MStatus' => 'required|string|max:191',
-            'ministry' => 'nullable|string|max:191',
-            'parishname' => 'required|string|max:191',
-            'parishcode' => 'required|string|max:191',
-            // // 'thumbnail' => 'required|string |max:191',
-            // 'thumbnail' => 'required|image|mimes:jpeg,png,jpg,gif|max:2048'
+            'role' => 'required|string|max:191',
+            'thumbnail' => 'nullable|image|mimes:jpeg,png,jpg,gif|max:2048'
         ];
     }
 }
