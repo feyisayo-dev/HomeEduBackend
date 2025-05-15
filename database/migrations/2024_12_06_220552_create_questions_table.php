@@ -20,6 +20,8 @@ return new class extends Migration
             $table->string('answer');
             $table->string('class');
             $table->string('subtopic');
+            $table->string('subject')->nullable();
+            $table->string('topic')->nullable();
             $table->string('image');
             $table->timestamps();
         });

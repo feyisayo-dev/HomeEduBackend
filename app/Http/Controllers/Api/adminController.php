@@ -5,11 +5,14 @@ namespace App\Http\Controllers\Api;
 use App\Models\report;
 use App\Models\topics;
 use App\Models\Classes;
+use App\Models\Student;
 use App\Models\examples;
 use App\Models\subjects;
 use App\Models\subtopic;
 use App\Models\narration;
 use App\Models\questions;
+use App\Models\leaderboard;
+use Illuminate\Support\Str;
 use App\Models\explanations;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -22,6 +25,7 @@ use WisdomDiala\Countrypkg\Models\Country;
 use Illuminate\Http\ResponseTrait\original;
 use App\Http\Controllers\Api\StudentController;
 use WisdomDiala\Countrypkg\Models\State as countrystate;
+use Illuminate\Support\Facades\Hash;
 
 class adminController extends Controller
 {
@@ -293,6 +297,7 @@ class adminController extends Controller
         $validator = Validator::make($request->all(), [
             'TopicId' => 'required|string|max:191',
             'Subtopic' => 'required|string',
+            'Class' => 'required|string',
         ]);
 
         if ($validator->fails()) {
@@ -312,7 +317,7 @@ class adminController extends Controller
             }
 
             // Calculate the SubTopicCount
-            $SubTopicCount = subtopic::where('SubtopicId', 'like', $request->Subtopic . '%')->count() + 1;
+            $SubTopicCount = subtopic::where('TopicId', 'like', $request->TopicId . '%')->count() + 1;
 
             // Generate the padded suffix
             $num_padded = sprintf("%03d", $SubTopicCount);
@@ -565,6 +570,7 @@ class adminController extends Controller
             'subtopicId' => 'nullable|string|max:191',
             'examId' => 'nullable|string|max:191',
             'time_taken' => 'required|string|max:191',
+            'class' => 'required|string', // Needed to update leaderboard
         ]);
 
         if ($validator->fails()) {
@@ -572,72 +578,98 @@ class adminController extends Controller
                 'status' => 422,
                 'error' => $validator->messages(),
             ], 422);
-        } else {
-            // Ensure either subtopicId or examId is provided, not both
-            if ($request->subtopicId && $request->examId) {
-                return response()->json([
-                    'status' => 400,
-                    'message' => 'Provide either subtopicId or examId, not both.',
-                ], 400);
-            }
+        }
 
-            // Find an existing report for the username, subtopicId, or examId
-            $existingReport = report::where('username', $request->username)
-                ->where(function ($query) use ($request) {
-                    if ($request->subtopicId) {
-                        $query->where('SubtopicId', $request->subtopicId);
-                    }
-                    if ($request->examId) {
-                        $query->where('ExamId', $request->examId);
-                    }
-                })
-                ->first();
+        if ($request->subtopicId && $request->examId) {
+            return response()->json([
+                'status' => 400,
+                'message' => 'Provide either subtopicId or examId, not both.',
+            ], 400);
+        }
 
-            // If a report exists, compare the scores
-            if ($existingReport) {
-                if ($request->score > $existingReport->Score) {
-                    // Update the existing report if the new score is higher
-                    $existingReport->update([
-                        'Score' => $request->score,
-                        'time_taken' => $request->time_taken,
-                    ]);
+        $username = $request->username;
+        $class = $request->class;
+        $score = $request->score;
 
-                    return response()->json([
-                        'status' => 200,
-                        'message' => 'Report updated successfully with a higher score.',
-                        'report' => $existingReport,
-                    ], 200);
-                } else {
-                    // Return a message if the new score is not higher
-                    return response()->json([
-                        'status' => 200,
-                        'message' => 'Existing report has a higher or equal score. No update was made.',
-                        'report' => $existingReport,
-                    ], 200);
+        // Calculate stars from percentage
+        $newStars = $score >= 90 ? 3 : ($score >= 70 ? 2 : ($score >= 50 ? 1 : 0));
+
+        // Check if a previous report exists
+        $existingReport = report::where('username', $username)
+            ->where(function ($query) use ($request) {
+                if ($request->subtopicId) {
+                    $query->where('SubtopicId', $request->subtopicId);
                 }
-            }
+                if ($request->examId) {
+                    $query->where('ExamId', $request->examId);
+                }
+            })
+            ->first();
 
-            // Create a new report if none exists
-            $newReport = report::create([
-                'username' => $request->username,
+        if ($existingReport) {
+            // Compare scores
+            if ($score > $existingReport->Score) {
+                $oldStars = $existingReport->Score >= 90 ? 3 : ($existingReport->Score >= 70 ? 2 : ($existingReport->Score >= 50 ? 1 : 0));
+                $starDifference = $newStars - $oldStars;
+
+                if ($starDifference > 0) {
+                    // Update leaderboard with additional stars
+                    $this->updateLeaderboardStars($username, $class, $starDifference);
+                }
+
+                // Update report score and time
+                $existingReport->update([
+                    'Score' => $score,
+                    'time_taken' => $request->time_taken,
+                ]);
+
+                return response()->json([
+                    'status' => 200,
+                    'message' => 'Report updated with higher score.',
+                    'report' => $existingReport,
+                ]);
+            } else {
+                return response()->json([
+                    'status' => 200,
+                    'message' => 'No score improvement, no leaderboard update.',
+                    'report' => $existingReport,
+                ]);
+            }
+        } else {
+            // First time reporting → create report
+            report::create([
+                'username' => $username,
                 'SubtopicId' => $request->subtopicId ?? null,
                 'ExamId' => $request->examId ?? null,
-                'Score' => $request->score,
+                'Score' => $score,
                 'time_taken' => $request->time_taken,
             ]);
 
-            if ($newReport) {
-                return response()->json([
-                    'status' => 200,
-                    'message' => 'Report submitted successfully.',
-                    'report' => $newReport,
-                ], 200);
-            } else {
-                return response()->json([
-                    'status' => 500,
-                    'message' => 'Something went wrong. Report not created.',
-                ], 500);
-            }
+            // Update leaderboard with new stars
+            $this->updateLeaderboardStars($username, $class, $newStars);
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Report created and leaderboard updated.',
+            ]);
+        }
+    }
+
+    private function updateLeaderboardStars($username, $class, $starsToAdd)
+    {
+        $entry = leaderboard::where('username', $username)->first();
+
+        if ($entry) {
+            $entry->stars += $starsToAdd;
+            $entry->last_practice = now()->toDateString();
+            $entry->save();
+        } else {
+            leaderboard::create([
+                'username' => $username,
+                'stars' => $starsToAdd,
+                'class' => $class,
+                'last_practice' => now()->toDateString(),
+            ]);
         }
     }
 
@@ -789,5 +821,461 @@ class adminController extends Controller
                 'message' => 'No narration found for this subtopic.',
             ], 404);
         }
+    }
+    public function leaderboard(Request $request)
+    {
+        $class = $request->input('class'); // Get class from formData / POST body
+
+        if (!$class) {
+            return response()->json([
+                'status' => 400,
+                'message' => 'Class is required',
+            ], 400);
+        }
+
+        $allRecords = Leaderboard::where('class', '=', $class)->get();
+
+        if ($allRecords->isNotEmpty()) {
+            return response()->json([
+                'status' => 200,
+                'message' => 'Record fetched successfully',
+                'data' => $allRecords,
+            ], 200);
+        } else {
+            return response()->json([
+                'status' => 404,
+                'message' => 'No records found for the specified class!',
+            ], 404);
+        }
+    }
+
+    public function loginAdmin(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'username' => 'required|string',
+            'password' => 'required|string|min:5',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 422,
+                'error' => $validator->messages(),
+            ], 422);
+        }
+
+        $username = $request->username;
+        $password = $request->password;
+
+        if ($username === 'FSDGroup' && $password === '12345') {
+            $token = Str::random(20);
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Login successful',
+                'token' => $token,
+            ], 200);
+        } else {
+            return response()->json([
+                'status' => 401,
+                'message' => 'Invalid credentials',
+            ], 401);
+        }
+    }
+    public function Editname(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'username' => 'required|string',
+            'fullname' => 'required|string',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 422,
+                'error' => $validator->messages(),
+            ], 422);
+        } else {
+            $usernameExists = Student::where('username', 'like', $request->username);
+            if ($usernameExists->exists()) {
+                $student = Student::where('username', $request->username)->first();
+                $student->fullName = $request->fullname;
+                $student->save();
+
+                return response()->json([
+                    'status' => 200,
+                    'message' => 'Name updated successfully',
+                    'student' => $student,
+                ], 200);
+            } else {
+                return response()->json([
+                    'status' => 404,
+                    'message' => 'Username not found',
+                ], 404);
+            }
+        }
+    }
+    public function EditPassword(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'username' => 'required|string',
+            'old_password' => 'required|string',
+            'new_password' => 'required|string|min:5',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 422,
+                'error' => $validator->messages(),
+            ], 422);
+        }
+
+        $username = $request->username;
+        $oldPassword = $request->old_password;
+        $newPassword = $request->new_password;
+
+        // Check if the username exists
+        $student = Student::where('username', $username)->first();
+        if (!$student) {
+            return response()->json([
+                'status' => 404,
+                'message' => 'Username not found',
+            ], 404);
+        }
+
+        // Check if the old password matches
+        if (!Hash::check($oldPassword, $student->password)) {
+            return response()->json([
+                'status' => 401,
+                'message' => 'Old password is incorrect',
+            ], 401);
+        }
+
+        // Update the password
+        $student->password = Hash::make($newPassword);
+        $student->save();
+
+        return response()->json([
+            'status' => 200,
+            'message' => 'Password updated successfully',
+        ], 200);
+    }
+    public function EditEmail(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'username' => 'required|string',
+            'email' => 'required|email|unique:students,email',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 422,
+                'error' => $validator->messages(),
+            ], 422);
+        }
+
+        $username = $request->username;
+        $email = $request->email;
+
+        // Check if new username already exists in students table
+            $existingUser = Student::where('email', $email)->first();
+            if ($existingUser) {
+                return response()->json([
+                    'status' => 101, // Custom status code for duplicate username
+                    'message' => 'Email already exists. Choose another.',
+                ], 101);
+            }
+
+        // Check if the username exists
+        $student = Student::where('username', $username)->first();
+        if (!$student) {
+            return response()->json([
+                'status' => 404,
+                'message' => 'Username not found',
+            ], 404);
+        }
+
+        // Update the email
+        $student->email = $email;
+        $student->save();
+
+        return response()->json([
+            'status' => 200,
+            'message' => 'Email updated successfully',
+        ], 200);
+    }
+    public function EditPhone(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'username' => 'required|string',
+            'phone' => 'required|string|unique:students,phone',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 422,
+                'error' => $validator->messages(),
+            ], 422);
+        }
+
+        $username = $request->username;
+        $phone = $request->phone;
+
+        // Check if the username exists
+        $student = Student::where('username', $username)->first();
+        if (!$student) {
+            return response()->json([
+                'status' => 404,
+                'message' => 'Username not found',
+            ], 404);
+        }
+
+        // Update the phone number
+        $student->phoneNumber = $phone;
+        $student->save();
+
+        return response()->json([
+            'status' => 200,
+            'message' => 'Phone number updated successfully',
+        ], 200);
+    }
+    public function EditProfileImage(Request $request)
+    {
+        Log::info('All request data', $request->all());
+        Log::info('File exists:', ['hasFile' => $request->hasFile('profile_image')]);
+        Log::info('File details:', ['file' => $request->file('profile_image')]);
+
+        $validator = Validator::make($request->all(), [
+            'username' => 'required|string',
+            'profile_image' => 'required|image|mimes:jpeg,png,jpg,gif|max:20480',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 422,
+                'error' => $validator->messages(),
+            ], 422);
+        }
+
+        $username = $request->username;
+
+        // Check if the username exists
+        $student = Student::where('username', $username)->first();
+        if (!$student) {
+            return response()->json([
+                'status' => 404,
+                'message' => 'Username not found',
+            ], 404);
+        }
+
+        // Handle the profile image upload
+        if ($request->hasFile('profile_image')) {
+            $fileUploaded = $request->file('profile_image');
+            $newProfileImage = $username . '_profile.' . $fileUploaded->getClientOriginalExtension();
+            $relativePath = $fileUploaded->storeAs('thumbnails', $newProfileImage, 'public');
+
+            // Update the profile image
+            $student->thumbnail = $relativePath;
+            $student->save();
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Profile image updated successfully',
+                'profile_image' => $relativePath,
+            ], 200);
+        } else {
+            return response()->json([
+                'status' => 400,
+                'message' => 'No profile image uploaded',
+            ], 400);
+        }
+    }
+    public function EditUserClass(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'username' => 'required|string',
+            'class' => 'required|string',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 422,
+                'error' => $validator->messages(),
+            ], 422);
+        }
+
+        $username = $request->username;
+        $class = $request->class;
+
+        // Check if the username exists
+        $student = Student::where('username', $username)->first();
+        if (!$student) {
+            return response()->json([
+                'status' => 404,
+                'message' => 'Username not found',
+            ], 404);
+        }
+
+        // Update the class
+        $student->class = $class;
+        $student->save();
+
+        return response()->json([
+            'status' => 200,
+            'message' => 'Class updated successfully',
+        ], 200);
+    }
+    public function EditUsername(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'old_username' => 'required|string',
+            'new_username' => 'required|string|unique:students,username',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 422,
+                'error' => $validator->messages(),
+            ], 422);
+        }
+
+        DB::beginTransaction();
+        try {
+            $old = $request->old_username;
+            $new = $request->new_username;
+
+            // Check if new username already exists in students table
+            $existingUser = Student::where('username', $new)->first();
+            if ($existingUser) {
+                return response()->json([
+                    'status' => 101, // Custom status code for duplicate username
+                    'message' => 'Username already exists. Choose another.',
+                ], 101);
+            }
+
+            // Confirm the student exists
+            $student = Student::where('username', $old)->first();
+            if (!$student) {
+                return response()->json([
+                    'status' => 404,
+                    'message' => 'Old username not found',
+                ], 404);
+            }
+
+            // Update the main student record
+            $student->username = $new;
+            $student->save();
+
+            // Dynamically get tables that have a 'username' column
+            $tables = DB::select("
+            SELECT TABLE_NAME
+            FROM INFORMATION_SCHEMA.COLUMNS
+            WHERE COLUMN_NAME = 'username'
+              AND TABLE_SCHEMA = DATABASE()
+        ");
+
+            foreach ($tables as $table) {
+                DB::table($table->TABLE_NAME)
+                    ->where('username', $old)
+                    ->update(['username' => $new]);
+            }
+
+            DB::commit();
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Username updated across all tables',
+                'new_username' => $new,
+            ], 200);
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                'status' => 500,
+                'message' => 'Error updating username',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+    public function refresh(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'username' => 'required|string',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 422,
+                'error' => $validator->messages(),
+            ], 422);
+        }
+
+        $username = $request->username;
+
+        // Check if the username exists
+        $student = Student::where('username', $username)->first();
+        if (!$student) {
+            return response()->json([
+                'status' => 404,
+                'message' => 'Username not found',
+            ], 404);
+        }
+
+        $thumbnailPath = Storage::url($student->thumbnail);
+                $thumnailPublicpath = URL::to($thumbnailPath);
+                Log::info("Image path: " . json_encode($thumnailPublicpath));
+
+                if ($student['role'] === 'Client') {
+
+                    $response = [
+                        'userAbilities' => [
+                            [
+                                'action' => 'read',
+                                'subject' => 'User',
+                            ],
+                        ],
+                        'userData' => [
+                            'id' => $student->id,
+                            'username' => $student->username,
+                            'fullName' => $student->fullName,
+                            'dob' => $student->dob,
+                            'email' => $student->email,
+                            'password' => $student->password,
+                            'phoneNumber' => $student->phoneNumber,
+                            'class' => $student->class,
+                            'parentName' => $student->parentName,
+                            'parentContact' => $student->parentContact,
+                            'address' => $student->address,
+                            'avatar' => $thumnailPublicpath,
+                            'role' => $student->role,
+                        ],
+                    ];
+                } else {
+                    $response = [
+                        'userAbilities' => [
+                            [
+                                'action' => 'manage',
+                                'subject' => 'all',
+                            ],
+                        ],
+                        'userData' => [
+                            'id' => $student->id,
+                            'username' => $student->username,
+                            'fullName' => $student->fullName,
+                            'dob' => $student->dob,
+                            'email' => $student->email,
+                            'password' => $student->password,
+                            'phoneNumber' => $student->phoneNumber,
+                            'class' => $student->class,
+                            'parentName' => $student->parentName,
+                            'parentContact' => $student->parentContact,
+                            'address' => $student->address,
+                            'avatar' => $thumnailPublicpath,
+                            'role' => $student->role,
+                        ],
+                    ];
+                }
+                return response()->json([
+                    'status' => 200,
+                    'message' => 'User data refreshed successfully',
+                    'user' => $response,
+                ], 200);
     }
 }

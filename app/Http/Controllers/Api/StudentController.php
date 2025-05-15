@@ -4,6 +4,8 @@ namespace App\Http\Controllers\Api;
 
 use App\Models\report;
 use App\Models\Student;
+use App\Models\questions;
+use App\Models\leaderboard;
 use Illuminate\Http\Request;
 use App\Traits\HttpResponses;
 use App\Http\Requests\LoginRequest;
@@ -260,4 +262,195 @@ class StudentController extends Controller
         }
     }
 
+
+    public function leaderboard(Request $request)
+    {
+        // Validate all incoming data
+        $validator = Validator::make($request->all(), [
+            'username' => 'required|string',
+            'class' => 'required|string',
+            'stars' => 'required|integer|min:0',
+            'last_practice' => 'required|date_format:Y-m-d',
+        ]);
+
+        // Handle validation errors
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 422,
+                'error' => $validator->messages(),
+            ], 422);
+        }
+
+        try {
+            $username = $request->input('username');
+            $stars = $request->input('stars');
+            $class = $request->input('class');
+            $lastPractice = $request->input('last_practice');
+
+            // Check if the user already exists on the leaderboard
+            $entry = leaderboard::where('username', $username)->first();
+
+            if ($entry) {
+                // Update stars and last practice date
+                $entry->stars += $stars;
+                $entry->last_practice = $lastPractice;
+                $entry->save();
+            } else {
+                // Create a new leaderboard entry
+                leaderboard::create([
+                    'username' => $username,
+                    'stars' => $stars,
+                    'class' => $class,
+                    'last_practice' => $lastPractice,
+                ]);
+            }
+
+            return response()->json([
+                'status' => 200,
+                'message' => 'Leaderboard updated successfully',
+            ], 200);
+        } catch (\Exception $e) {
+            Log::error('Leaderboard update failed: ' . $e->getMessage());
+            return response()->json([
+                'status' => 500,
+                'message' => 'Failed to update leaderboard',
+            ], 500);
+        }
+    }
+    public function ExamQuestions(Request $request)
+    {
+        $validator = Validator::make($request->all(), [
+            'class' => 'required|string|max:191',
+            'total_questions' => 'required|integer|min:1',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 422,
+                'error' => $validator->messages(),
+            ], 422);
+        }
+
+        $class = $request->input('class');
+        $JAMB_SUBJECT = $request->input('JAMB_SUBJECT');
+        $subject = $request->input('subject');
+        $topic = $request->input('topic');
+        $total = $request->input('total_questions');
+
+        if ($subject && !$topic) {
+            // 🧠 Random questions per topic (at least 1 per topic)
+            $topics = questions::where('class', $class)
+                ->where('subject', $subject)
+                ->pluck('topic')
+                ->unique()
+                ->values();
+
+            $allQuestions = collect();
+
+            foreach ($topics as $topicName) {
+                $topicQuestions = questions::where('class', $class)
+                    ->where('subject', $subject)
+                    ->where('topic', $topicName)
+                    ->inRandomOrder()
+                    ->take(1)
+                    ->get();
+
+                $allQuestions = $allQuestions->concat($topicQuestions);
+            }
+
+            $remaining = $total - $allQuestions->count();
+
+            if ($remaining > 0) {
+                $extra = questions::where('class', $class)
+                    ->where('subject', $subject)
+                    ->whereNotIn('id', $allQuestions->pluck('id'))
+                    ->inRandomOrder()
+                    ->take($remaining)
+                    ->get();
+
+                $allQuestions = $allQuestions->concat($extra);
+            }
+
+            return response()->json([
+                'status' => 200,
+                'data' => $allQuestions->shuffle()->values(),
+            ], 200);
+        }
+
+        if ($subject && $topic) {
+            // 🎯 Random questions under subtopics of a topic
+            $questions = questions::where('class', $class)
+                ->where('subject', $subject)
+                ->where('topic', $topic)
+                ->inRandomOrder()
+                ->take($total)
+                ->get();
+
+            if ($questions->isEmpty()) {
+                return response()->json([
+                    'status' => 404,
+                    'message' => 'No questions found for the specified topic.',
+                ], 404);
+            }
+
+            return response()->json([
+                'status' => 200,
+                'data' => $questions,
+            ], 200);
+        }
+
+        if ($JAMB_SUBJECT) {
+            $subjects = explode(",", $JAMB_SUBJECT);
+            $allQuestions = collect();
+
+            foreach ($subjects as $subj) {
+                $isEnglish = strtolower(trim($subj)) === 'english';
+                $subjectLimit = $isEnglish ? 60 : 40 / (count($subjects) - 1);
+
+                $topics = questions::where('class', $class)
+                    ->where('subject', $subj)
+                    ->pluck('topic')
+                    ->unique()
+                    ->values();
+
+                $subjectQuestions = collect();
+
+                foreach ($topics as $topicName) {
+                    $topicQuestions = questions::where('class', $class)
+                        ->where('subject', $subj)
+                        ->where('topic', $topicName)
+                        ->inRandomOrder()
+                        ->take(1)
+                        ->get();
+
+                    $subjectQuestions = $subjectQuestions->concat($topicQuestions);
+                }
+
+                $remaining = $subjectLimit - $subjectQuestions->count();
+
+                if ($remaining > 0) {
+                    $extra = questions::where('class', $class)
+                        ->where('subject', $subj)
+                        ->whereNotIn('id', $subjectQuestions->pluck('id'))
+                        ->inRandomOrder()
+                        ->take($remaining)
+                        ->get();
+
+                    $subjectQuestions = $subjectQuestions->concat($extra);
+                }
+
+                $allQuestions = $allQuestions->concat($subjectQuestions);
+            }
+
+            return response()->json([
+                'status' => 200,
+                'data' => $allQuestions->shuffle()->values(),
+            ], 200);
+        }
+
+        return response()->json([
+            'status' => 400,
+            'message' => 'Invalid parameters provided.',
+        ], 400);
+    }
 }

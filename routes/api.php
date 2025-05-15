@@ -24,7 +24,7 @@ use App\Http\Controllers\Api\UserStreakController;
 
 // Posts
 Route::post('/login', [StudentController::class, 'login']);
-Route::post('/logout', [StudentController::class, 'logout']);
+Route::post('/loginAdmin', [adminController::class, 'loginAdmin']);
 Route::post('/AddStudent', [StudentController::class, 'AddStudent']);
 Route::post('/AddClasses', [adminController::class, 'AddClasses']);
 Route::post('/AddMultipleCountries', [adminController::class, 'AddNewCountries']);
@@ -38,14 +38,21 @@ Route::post('/AddNarration', [adminController::class, 'AddNarration']);
 Route::post('/questions/{subtopics}', [adminController ::class, 'questions']);
 Route::post('/subjects', [adminController ::class, 'subjects']);
 Route::post('/report', [adminController ::class, 'report']);
+Route::post('/getleaderboard', [adminController::class, 'leaderboard']);
+Route::post('/editname', [adminController::class, 'Editname']);
+Route::post('/editusername', [adminController::class, 'EditUsername']);
+Route::post('/editemail', [adminController::class, 'EditEmail']);
+Route::post('/editclass', [adminController::class, 'EditUserClass']);
+Route::post('/editphone', [adminController::class, 'EditPhone']);
+Route::post('/EditProfileImage', [adminController::class, 'EditProfileImage']);
 Route::post('/streaks/update', [UserStreakController ::class, 'updateStreak']);
-
+Route::post('/refresh', [adminController ::class, 'refresh']);
+Route::post('/ExamQuestions', [StudentController ::class, 'ExamQuestions']);
 
 
 // Get
-
 Route::get('/FetchAllCountries', [adminController::class, 'FetchAllCountry']);
-Route::get('/fetchAllClasses', [adminController::class, 'fetchAllClasses']);
+Route::get('/fetchAllClasses',  [adminController::class, 'fetchAllClasses']);
 Route::get('/streaks', [UserStreakController::class, 'getStreaks']);
 Route::get('/topics/{subjects}', [adminController ::class, 'topics']);
 Route::get('/subtopics/{topics}', [adminController ::class, 'subtopics']);
@@ -54,3 +61,4 @@ Route::get('/examples/{subtopics}', [adminController ::class, 'examples']);
 Route::get('/narration/{questions}', [adminController ::class, 'narration']);
 Route::get('/report/{username}', [StudentController ::class, 'report']);
 Route::get('/SpecificReport/{username}', [StudentController ::class, 'SpecificReport']);
+

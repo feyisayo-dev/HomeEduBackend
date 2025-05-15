@@ -18,6 +18,8 @@ class questions extends Model
         'answer',
         'class',
         'subtopic',
+        'subject',
+        'topic',
         'image',
        ];
 }
